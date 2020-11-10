@@ -12,5 +12,7 @@ file_pattern = [(r'10X_(?P<cycle>c[0-9]+)-SBS-(?P<c>[0-9]+)/'
                   '_Seq(?P<point>[0-9]+'
                   '.nd2')]
 
-Parallel(backend='loky',n_jobs=-2)(delayed(single_nd2_to_tif(file, mag='10X',file_pattern=file_pattern) for file in nd2_files))
+#Parallel(backend='loky',n_jobs=-2)(delayed(
+for file in nd2_files:
+	single_nd2_to_tif(file, mag='10X',file_pattern=file_pattern)
 

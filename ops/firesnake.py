@@ -8,6 +8,7 @@ warnings.filterwarnings('ignore', message='regionprops and image moments')
 warnings.filterwarnings('ignore', message='non-tuple sequence for multi')
 warnings.filterwarnings('ignore', message='precision loss when converting')
 
+import matplotlib
 import numpy as np
 import pandas as pd
 import skimage
@@ -52,19 +53,28 @@ class Snake():
         than one. Subpixel alignment is done if `upsample_factor` is greater than
         one (can be slow).
         """
-        # print(data.shape)
+        #description = ops.filenames.parse_filename(file,custom_patterns=file_pattern)
+
         if cycle_files is not None:
             arr = []
             # snakemake passes de-nested list of numpy arrays
             current = 0
             for cycle in cycle_files:
+                #print(cycle)
                 if cycle == 1:
-                    arr.append(data[current])
+                    arr.append(np.array(data[cycle-1]))
+                    #print(np.shape(arr))
+                    #current += cycle
+                if cycle==len(cycle_files):
+                    arr.append(np.array(data[cycle-1]))
+                    data = np.array(arr)
                 else:
-                    arr.append(np.array(data[current:current+cycle]))
-                current += cycle
+                    arr.append(np.array(data[cycle-1]))
+                    #print(np.shape(arr))
+                    current += cycle
 
-            data = np.array(arr)
+            #data = np.array(arr)
+
         else:
             data = np.array(data)
 
@@ -98,7 +108,7 @@ class Snake():
         # else:
         #     extra = 0
         #     stacked = data
-
+        print(stacked.ndim)
         assert stacked.ndim == 4, 'Input data must have dimensions CYCLE, CHANNEL, I, J'
 
         # align between SBS channels for each cycle
@@ -637,7 +647,7 @@ class Snake():
 
         # nucleus grayscale channel features
         dfs.extend([(Snake._extract_features_bare(data_phenotype[...,channel,:,:],nuclei,ops.cp_emulator.grayscale_features)
-            .rename(columns=ops.cp_emulator.grayscale_columns)
+            .rename(columns=ops.cp_emulator.intensity_distribution_columns)
             .set_index('label')
             .rename(columns = lambda x: 'nucleus_'+channel_names[channel]+'_'+x)
             ) 
@@ -646,7 +656,7 @@ class Snake():
 
         # cell grayscale channel features
         dfs.extend([(Snake._extract_features_bare(data_phenotype[...,channel,:,:],cells,ops.cp_emulator.grayscale_features)
-            .rename(columns=ops.cp_emulator.grayscale_columns)
+            .rename(columns=ops.cp_emulator.intensity_distribution_columns)
             .set_index('label')
             .rename(columns = lambda x: 'cell_'+channel_names[channel]+'_'+x)
             ) 
@@ -765,30 +775,6 @@ class Snake():
         return (Snake._extract_bases(maxed, peaks, cells, bases=['-'],
                     threshold_peaks=threshold_peaks, wildcards=wildcards))
 
-## timelapse
-    @staticmethod
-    def _align_stage_drift(data,frames=10):
-        '''Correct minor stage drift across first frames of timelapse due to plate settling into
-        plate holder. Currently works only with timelapse of single channel, single z-slice images.
-        "frames" should be set such that the from the "frames"th frame on, there is approximately 
-        no more stage drift.
-        '''
-        offsets = []
-        data = np.squeeze(data)
-        for source,target in zip(data[:(frames-1)],data[1:frames]):
-            windowed = Align.apply_window(np.array([target,source]),window=2)
-            offsets.append(Align.calculate_offsets(windowed,upsample_factor=1))
-        offsets = np.array([offset[1] for offset in offsets])
-
-        # sum offsets from end -> beginning
-        offsets = np.cumsum(offsets[::-1],axis=0)[::-1]
-
-        aligned = Align.apply_offsets(data[:(frames)], offsets)
-
-        aligned = np.concatenate([aligned,data[(frames-1):]])
-
-        return aligned[:,None]
-
     @staticmethod
     def _track_live_nuclei(nuclei, tolerance_per_frame=5):
         
@@ -826,47 +812,25 @@ class Snake():
     def _relabel_trackmate(nuclei, df_trackmate, df_nuclei_coords):
         import ops.timelapse
 
-        # include nuclei not in tracks
-        df = (df_nuclei_coords
-                .merge(df_trackmate[['id','track_id','cell','frame','parent_ids']],how='left',on=['frame','cell'])
-                .fillna({'track_id':-1,
-                    'parent_ids':'[]',
-                    })
-               )
-
-        # give un-tracked cells a unique id
-        missing = sorted(set(range(df.pipe(len)))-set(df['id']))
-        df.loc[df['id'].isna(),'id'] = missing
-
-        # set relabeling values
-        df_relabel = ops.timelapse.format_trackmate(df[['id','cell','frame','parent_ids']])
-
-        df_relabel = (df
-            .merge(df_relabel[['id','relabel','parent_cell_0','parent_cell_1']],how='left',on='id')
-            .drop(columns=['id','parent_ids'])
-            )
+        df_relabel = ops.timelapse.format_trackmate(df_trackmate,df_nuclei_coords)
 
         def relabel_frame(nuclei_frame,df_relabel_frame):
-            nuclei_frame_ = nuclei_frame.copy()
-            max_label = nuclei_frame.max() + 1
-            labels = df_relabel_frame['cell'].tolist()
-            relabels = df_relabel_frame['relabel'].tolist()
-            table = np.zeros(nuclei_frame.max()+1)
-            table[labels] = relabels
-            nuclei_frame_ = table[nuclei_frame_]
-            return nuclei_frame_
+            relabeled_frame = np.zeros(nuclei_frame.shape, dtype=np.uint16)
+            for _,cell in df_relabel_frame.iterrows():
+                relabeled_frame[nuclei_frame==int(cell['cell'])]  = int(cell['relabel'])
+            return relabeled_frame
 
         relabeled  = np.array([relabel_frame(nuclei_frame,df_relabel_frame) 
             for nuclei_frame, (_,df_relabel_frame) in zip(nuclei,df_relabel.groupby('frame'))])
 
-        return (df_relabel.drop(columns=['cell']).rename(columns={'relabel':'cell'}), relabeled.astype(np.uint16))
+        return df_relabel.drop(columns=['cell']).rename(columns={'relabel':'cell'}),relabeled
 
     @staticmethod
-    def _merge_triangle_hash(df_0,df_1,alignment,threshold=2):
+    def _merge_triangle_hash(df_0,df_1,alignment):
         import ops.triangle_hash as th
         df_1 = df_1.rename(columns={'tile':'site'})
         model = th.build_linear_model(alignment['rotation'],alignment['translation'])
-        return th.merge_sbs_phenotype(df_0,df_1,model,threshold=threshold)
+        return th.merge_sbs_phenotype(df_0,df_1,model)
 
     @staticmethod
     def add_method(class_, name, f):
@@ -896,12 +860,8 @@ class Snake():
             # and output (needed to save result)
             input_kwargs, output_kwargs = restrict_kwargs(kwargs, f)
 
-            load_kwargs = {}
-            if 'maxworkers' in output_kwargs:
-                load_kwargs['maxworkers'] = output_kwargs.pop('maxworkers')
-
             # load arguments provided as filenames
-            input_kwargs = {k: load_arg(v,**load_kwargs) for k,v in input_kwargs.items()}
+            input_kwargs = {k: load_arg(v) for k,v in input_kwargs.items()}
 
             results = f(**input_kwargs)
 
@@ -939,13 +899,13 @@ def remove_channels(data, remove_index):
 # IO
 
 
-def load_arg(x,**kwargs):
+def load_arg(x):
     """Try loading data from `x` if it is a filename or list of filenames.
     Otherwise just return `x`.
     """
-    one_file = lambda x: load_file(x,**kwargs)
-    many_files = lambda x: [load_file(f,**kwargs) for f in x]
-    nested_files = lambda x: [[load_file(f,**kwargs) for f in f_list] for f_list in x]
+    one_file = load_file
+    many_files = lambda x: [load_file(f) for f in x]
+    nested_files = lambda x: [[load_file(f) for f in f_list] for f_list in x]
     
     for f in one_file, many_files, nested_files:
         try:
@@ -997,9 +957,8 @@ def load_pkl(filename):
         return None
 
 
-def load_tif(filename,**kwargs):
-    kwargs, _ = restrict_kwargs(kwargs, ops.io.read_stack)
-    return ops.io.read_stack(filename,**kwargs)
+def load_tif(filename):
+    return ops.io.read_stack(filename)
 
 def load_hdf(filename):
     return ops.io_hdf.read_hdf_image(filename)
@@ -1036,7 +995,7 @@ def restrict_kwargs(kwargs, f):
     return keep, discard
 
 
-def load_file(filename,**kwargs):
+def load_file(filename):
     """Attempt to load file, raising an error if the file is not found or 
     the file extension is not recognized.
     """
@@ -1045,7 +1004,7 @@ def load_file(filename,**kwargs):
     if not os.path.isfile(filename):
         raise IOError(2, 'Not a file: {0}'.format(filename))
     if filename.endswith('.tif'):
-        return load_tif(filename,**kwargs)
+        return load_tif(filename)
     elif filename.endswith('.pkl'):
         return load_pkl(filename)
     elif filename.endswith('.csv'):

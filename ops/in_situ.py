@@ -31,7 +31,7 @@ def format_bases(values, labels, positions, cycles, bases):
        .join(df_positions, on=READ)
        .sort_values([CELL, READ, CYCLE])
        )
-
+    print(df)
     return df
 
 def do_median_call(df_bases, cycles=12, channels=4, correction_quartile=0, correction_only_in_cells=False, correction_by_cycle=False):

@@ -169,6 +169,50 @@ def nd2_to_tif(file,mag='10X',zproject=False,fov_axes='cxy',n_threads=1, tqdm=Fa
     metadata_filename = ops.filenames.name_file(description,subdir='metadata',tag='metadata',ext='pkl')
     pd.DataFrame(well_metadata).to_pickle(metadata_filename)
 
+def single_nd2_to_tif(file,mag='10X',zproject=False, file_pattern=None):
+    if file_pattern is None:
+        file_pattern = [
+                    (r'(?P<cycle>c[0-9]+)?/?'
+                    '(?P<dataset>.*)?/?'
+                    'Well(?P<well>[0-6]*)_'
+                    '(Point[A-H][0-9]*_(?P<site>[0-9]*)_)?'
+                    'Channel((?P<channel_1>[^_,]+)(_[^,]*)?)?,?'
+                    '((?P<channel_2>[^_,]+)(_[^,]*)?)?,?'
+                    '((?P<channel_3>[^_,]+)(_[^,]*)?)?,?'
+                    '((?P<channel_4>[^_,]+)(_[^,]*)?)?,?'
+                    '((?P<channel_5>[^_,]+)(_[^_]*)?)?'
+                    '_Seq([0-9]+).nd2')
+                   ]
+                               
+    description = ops.filenames.parse_filename(file,custom_patterns=file_pattern)
+    description['ext']='tif'
+    description['mag']=mag
+    try:
+        description['subdir']='preprocess/'+description['cycle']
+    except:
+        description['subdir']='preprocess'
+    description['dataset']=None
+
+    with ND2Reader(file) as image:
+        image.iter_axes = 'c'
+        image.bundle_axes = 'xy'
+        filename = ops.filenames.name_file(description)
+        if zproject:
+            output=np.array([np.max(im,axis=0) for im in image])
+        else:
+            output=np.array([im for im in image])
+        save_stack(filename,output)
+
+        # metadata = {'filename':ops.filenames.name_file(description),
+        # 'x':image.metadata['x_data'],
+        # 'y':image.metadata['y_data'],
+        # 'z':image.metadata['z_data'],
+        # 'pfs_offset':image.metadata['pfs_offset'],
+        # 'pixel_size':image.metadata['pixel_microns']
+        # }
+        # return metadata
+
+
 def tile_config(df,output_filename):
     """Generate tile configuration file from site position dataframe for use with FIJI grid collection stitching
     """
@@ -229,11 +273,10 @@ def grid_view(files, bounds, padding=40, with_mask=False,im_func=None,memoize=Tr
 
 
 @ops.utils.memoize(active=False)
-def read_stack(filename, copy=True, maxworkers=None):
+def read_stack(filename, copy=True):
     """Read a .tif file into a numpy array, with optional memory mapping.
-    `maxworkers` determines the number of threads used for decompression of compressed tiffs.
     """
-    data = imread(filename, multifile=False, is_ome=False, maxworkers=maxworkers)
+    data = imread(filename, multifile=False, is_ome=False)
     # preserve inner singleton dimensions
     while data.shape[0] == 1:
         data = np.squeeze(data, axis=(0,))
@@ -246,7 +289,7 @@ def read_stack(filename, copy=True, maxworkers=None):
 def open_hdf_file(filename,mode='r'):
     return tables.file.open_file(filename,mode=mode)
 
-def read_hdf_image(filename,bbox=None,leading_dims=None,array_name='image',memoize=False):
+def read_hdf_image(filename,bbox=None,array_name='image',memoize=False):
     """reads in image from hdf file with given bbox. significantly (~100x) faster when reading in a
     100x100 pixel chunk compared to reading in an entire 1480x1480 tif.
     WARNING: metadata is read into cache on first access; if file metadata changes, re-reading the file will 
@@ -263,10 +306,7 @@ def read_hdf_image(filename,bbox=None,leading_dims=None,array_name='image',memoi
             #check if bbox is in image bounds
             i0, j0 = max(bbox[0], 0), max(bbox[1], 0)
             i1, j1 = min(bbox[2], image_node.shape[-2]), min(bbox[3], image_node.shape[-1])
-            if leading_dims is None:
-                image = image_node[...,i0:i1,j0:j1]
-            else:
-                image = image_node[leading_dims+(slice(i0,i1),slice(j0,j1))]
+            image = image_node[...,i0:i1,j0:j1]
         else:
             image = image_node[...]
     except:

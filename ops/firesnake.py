@@ -44,7 +44,7 @@ class Snake():
 
     @staticmethod
     def _align_SBS(data, method='DAPI', upsample_factor=2, window=2, cutoff=1, q_norm=70,
-        align_within_cycle=True, cycle_files=None, keep_trailing=False, n=1, remove_for_cycle_alignment=None):
+        align_within_cycle=True, cycle_files=None, keep_trailing=False, n=1, remove_for_cycle_alignment=None, rescale_channels=None, rescale_factors=None):
         """Rigid alignment of sequencing cycles and channels. 
 
         Expects `data` to be an array with dimensions (CYCLE, CHANNEL, I, J). 'n' 
@@ -52,6 +52,10 @@ class Snake():
         A centered subset of data is used if `window` is greater 
         than one. Subpixel alignment is done if `upsample_factor` is greater than
         one (can be slow).
+        
+        If channel rebalancing is needed, insert list of channel indices (e.g.,Cy3=1, A594=2, etc)
+        for "rescale_channels", and a list of the factors by which you want to multiply the channels' arrays for "rescale_factors".
+        Channel rebalancing function is currently configured for 12 cycle experiments.
         """
         #description = ops.filenames.parse_filename(file,custom_patterns=file_pattern)
 
@@ -77,6 +81,11 @@ class Snake():
 
         else:
             data = np.array(data)
+            
+        if rescale_channels is not None:
+            for num in range(0,12):
+                for i in range(0,len(rescale_channels)):
+                    data[num][rescale_channels[i]]=data[num][rescale_channels[i]]*rescale_factors[i]
 
         if keep_trailing != False | data.ndim==1:
             channels = [len(x) for x in data]

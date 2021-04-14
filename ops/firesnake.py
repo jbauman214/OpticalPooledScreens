@@ -327,11 +327,14 @@ class Snake():
         return loged
 
     @staticmethod
-    def _compute_std(data, remove_index=None):
+    def _compute_std(data, remove_index=None, single_cycle=False):
         """Use standard deviation to estimate sequencing read locations.
         """
         if remove_index is not None:
             data = remove_channels(data, remove_index)
+
+        if single_cycle:
+            return np.std(np.squeeze(data), axis=0)
 
         # for 1-cycle experiments
         if len(data.shape)==3:
@@ -406,8 +409,9 @@ class Snake():
 
         return df_bases
 
+
     @staticmethod
-    def _call_reads(df_bases, correction_quartile=0, peaks=None, correction_only_in_cells=True, correction_by_cycle=False, subtract_channel_min=False):
+    def _call_reads(df_bases, correction_quartile=0, peaks=None, correction_only_in_cells=True, correction_by_cycle=False, subtract_channel_min=False, single_cycle = False):
         """Median correction performed independently for each tile.
         Use the `correction_only_in_cells` flag to specify if correction
         is based on reads within cells, or all reads.
@@ -418,6 +422,15 @@ class Snake():
         if correction_only_in_cells:
             if len(df_bases.query('cell > 0')) == 0:
                 return
+
+        cycles = len(set(df_bases['cycle']))
+        channels = len(set(df_bases['channel']))
+        
+        if single_cycle:
+            df_bases = ops.in_situ.clean_up_bases(df_bases)
+            return ops.in_situ.call_barcodes(df_bases,
+                                    ops.in_situ.dataframe_to_values(df_bases),
+                                    cycles,channels)
         if subtract_channel_min:
             df_bases['intensity'] = df_bases['intensity'] - df_bases.groupby([WELL,TILE,CELL,READ,CHANNEL])['intensity'].transform('min')
         
@@ -438,12 +451,15 @@ class Snake():
 
         return df_reads
 
-    @staticmethod
-    def _call_cells(df_reads, df_pool=None,q_min=0):
+   @staticmethod
+    def _call_cells(df_reads, df_pool=None,q_min=0, single_cycle=False):
         """Median correction performed independently for each tile.
         """
         if df_reads is None:
             return
+        if single_cycle:
+            return (df_reads
+            .pipe(ops.in_situ.call_cells))
         if df_pool is None:
             return (df_reads
                 .query('Q_min >= @q_min')
